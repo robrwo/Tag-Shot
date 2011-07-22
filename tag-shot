@@ -1,0 +1,253 @@
+#!/usr/bin/perl
+
+=head1 NAME
+
+tag-shot - add tags to Shotwell photos
+
+=cut
+
+use strict;
+use warnings;
+
+use DBI;
+use DBD::SQLite;
+use File::HomeDir;
+use File::Spec;
+use Geo::Coordinates::Transform;
+use Getopt::Long;
+use Image::ExifTool;
+use JSON;
+use LWP::Simple;
+
+my @Files	= ( );
+
+my %TagIds	= ( );
+my %TagPhotos   = ( );
+
+my $Verbose	= 1;
+
+my $AddTags     = 0;
+my $GeoTag = 0;
+
+my $Db_File	= File::Spec->catfile( File::HomeDir->my_home,
+				       ".shotwell/data/photo.db" );
+
+my $res = GetOptions(
+
+    'd|database=s'	=> \$Db_File,
+
+    't|tags=s'		=> sub {
+	my ($field, $tags) = @_;
+	foreach my $tag (split /,/, $tags) {
+	    if ($tag =~ /^([\'\"])(.*)([\'\"])$/) {
+		$tag = $2, if ($1 eq $3);
+	    }
+	    $TagIds{$tag} = undef;
+	}
+      },
+
+    'add-tags!'         => \$AddTags,
+
+    'geo!' => \$GeoTag,
+
+    '<>'		=> sub {
+	my $file = shift;
+	push @Files, $file;
+      },
+);
+
+if ( -r $Db_File ) {
+
+  my $dbh = DBI->connect("dbi:SQLite:dbname=${Db_File}", "", "")
+    or die("Unable to connect to database '${Db_File}': ", DBI->errstr);
+
+  my $sth = $dbh->prepare("SELECT id FROM PhotoTable WHERE filename=? LIMIT 1")
+      or die("Unable to prepare SQL statement: ", $dbh->errstr);
+
+  my %FileIds = ( ); # file name to id in database
+
+  my %GeoTags = ( );
+
+  my $exif = new Image::ExifTool;
+
+  foreach my $file (@Files) {
+
+      if (-r $file) {
+
+	  $sth->execute($file);
+	  if (my $row = $sth->fetchrow_hashref) {
+	      my $id = $row->{id};
+	      $FileIds{$file} = $id;
+
+	      if ($GeoTag) {
+		  eval {
+		      my $info = $exif->ImageInfo("$file");
+		      my $coords = get_coords($info);
+		      if ($coords) {
+			  my @tags   = get_toponyms($coords);
+			  foreach my $tag (@tags) {
+
+			      if (exists $GeoTags{$tag}) {
+				  push @{ $GeoTags{$tag} }, $id;
+			      } else {
+				  $GeoTags{$tag} = [ $id ];
+			      }
+			  }
+		      }
+		  };
+	      }
+
+	  } else {
+	      warn("Cannot find file '${file}' in database: ignoring.\n");
+	  }
+
+      }
+      else {
+	  warn("Cannot read file '${file}': ignoring.\n");
+      }
+
+  }
+
+  $sth->finish();
+
+  $sth = $dbh->prepare("SELECT id, photo_id_list FROM TagTable WHERE name=? LIMIT 1")
+      or die("Unable to prepare SQL statement: ", $dbh->errstr);
+
+  my @NewTags = ( );
+
+  foreach my $tag (sort keys %TagIds) {
+
+      $sth->execute($tag);
+      if (my $row = $sth->fetchrow_hashref) {
+	  my $id = $row->{id};
+	  $TagIds{$tag} = $id;
+	  $TagPhotos{$id} = [ split /,/, $row->{photo_id_list} || "" ];
+      }
+      else {
+	  warn("Cannot find tag '${tag}' in database.\n");
+	  push @NewTags, $tag if ($AddTags);
+      }
+  }
+
+  foreach my $tag (sort keys %GeoTags) {
+      $sth->execute($tag);
+      if (my $row = $sth->fetchrow_hashref) {
+	  my $id = $row->{id};
+	  $TagIds{$tag} = $id;
+	  $GeoTags{$tag} = [ @{$GeoTags{$tag}}, split /,/, $row->{photo_id_list} || "" ];
+      }
+      else {
+	  warn("Cannot find tag '${tag}' in database.\n");
+      }
+
+  }
+
+  $sth->finish();
+
+  if ($AddTags) {
+
+      my $photo_ids = join(",", values %FileIds);
+
+      my $sth = $dbh->prepare("INSERT INTO TagTable (name, photo_id_list, time_created) VALUES (?, ?, ?)")
+	  or die("Unable to prepare SQL statement: ", $dbh->errstr);
+
+      foreach my $tag (@NewTags) {
+	  $sth->execute($tag, $photo_ids, time());
+	  warn("Added tag '${tag}' to database.\n");
+      }
+
+      foreach my $tag (keys %GeoTags) {
+	  unless ($TagIds{$tag}) {
+	      $sth->execute($tag, join(",", @{ $GeoTags{$tag} }), time());
+	      warn("Added tag '${tag}' to database.\n");
+	  }
+      }
+
+      $sth->finish();
+  }
+
+
+  my @photo_ids = values %FileIds;
+
+
+  $sth = $dbh->prepare("UPDATE TagTable SET photo_id_list=? WHERE id=?")
+      or die("Unable to prepare SQL statement: ", $dbh->errstr);
+
+  foreach my $tag_id (keys %TagPhotos) {
+
+     my %merged = map { $_ => 1 } ( @{ $TagPhotos{$tag_id} }, @photo_ids );
+
+     # $TagPhotos{$tag_id} = [ keys %merged ];
+
+     unless ($sth->execute(join(",", keys %merged), $tag_id)) {
+	 warn("Unable to update tag id ${tag_id}\n");
+     }
+
+  }
+
+  foreach my $tag (keys %GeoTags) {
+      if (my $tag_id = $TagIds{$tag}) {
+	  my %merged = map { $_ => 1 } ( @{ $GeoTags{$tag} } );
+
+	  unless ($sth->execute(join(",", keys %merged), $tag_id)) {
+	      warn("Unable to update tag id ${tag_id}\n");
+	  }
+      }
+  }
+
+  $sth->finish();
+
+  $dbh->disconnect();
+
+
+}
+else {
+  die("Cannot find Shotwell database at '${Db_File}'\n");
+}
+
+exit 0;
+
+# Fetch GPS coordinates from ImageInfo, and convert them to decimal degrees
+
+sub get_coords {
+    my $info = shift;
+
+    my $latx  = $info->{GPSLatitude};
+    my $lonx  = $info->{GPSLongitude};
+
+    if ($latx && $lonx) {
+
+	$latx =~ /^(\d+) deg (\d+)\' (\d+\.\d+)\" ([NS])$/;
+	my @lat = ( ($4 eq 'S') ? -$1 : $1, $2, $3);
+
+	$lonx =~ /^(\d+) deg (\d+)\' (\d+\.\d+)\" ([WE])$/;
+	my @lon = ( ($4 eq 'W') ? -$1 : $1, $2, $3);
+
+	my $cnv = new Geo::Coordinates::Transform;
+
+	return $cnv->cnv_to_dd( [ "@lat", "@lon" ] );
+    } else {
+	return;
+    }
+}
+
+sub get_toponyms {
+    my $coords = shift;
+
+    my $url    = sprintf("http://ws.geonames.org/findNearbyPlaceNameJSON?lat=%f\&lng=%f", @$coords);
+    my $json   = get($url);
+    my $data   = decode_json($json);
+
+    my %tags   = ( );
+    foreach my $d (@{$data->{geonames}}) {
+
+	foreach my $k (qw(name toponymName countryName adminName1 )) {
+	    if ($d->{$k} ne "") {
+		$tags{$d->{$k}} = 1;
+	    }
+	}
+
+    }
+    return (keys %tags);
+}
+
