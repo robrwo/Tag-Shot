@@ -275,6 +275,8 @@ my $GeoTag     = 0;
 my @Files = ( );
 my @Tags  = ( );
 
+my $Username    = "";  # geonames.org username
+
 my $res = GetOptions(
 
     'help' => sub {
@@ -301,6 +303,8 @@ my $res = GetOptions(
 	}
       },
 
+    'u|username=s' => \$Username,
+
     '<>'		=> sub {
 	push @Files, shift;
       },
@@ -315,6 +319,10 @@ my $db = Shotwell::DB->connect($Db_File);
 
 my $exif = new Image::ExifTool;
 
+unless ($Username) {
+    $Username = $ENV{GEONAMES_USERNAME}
+}
+
 foreach my $file (@Files) {
     my $id = $db->photo_id($file);
     if ($id) {
@@ -327,7 +335,7 @@ foreach my $file (@Files) {
 	    my $coords = get_coords($info);
 	    if ($coords) {
 
-		my @toponyms = get_toponyms($coords);
+		my @toponyms = get_toponyms($coords, $Username);
 
 		print join(",", @toponyms), "\n";
 
