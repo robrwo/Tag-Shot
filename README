@@ -9,6 +9,11 @@ SYNOPSIS
     -g, --geo
         Look for geotagging information, and add tags with place names.
 
+    -u, --username=USER
+        The <http://www.geonames.org> username (for using geotagging).
+        Defaults to the value in the "GEONAMES_USERNAME" environment
+        variable.
+
     -t, --tags=TAGS
         A comma-separated list of additional tags to add the files.
 
