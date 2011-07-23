@@ -16,6 +16,12 @@ The following options are supported:
 
 Look for geotagging information, and add tags with place names.
 
+=item -u, --username=USER
+
+The L<http://www.geonames.org> username (for using geotagging).
+Defaults to the value in the C<GEONAMES_USERNAME> environment
+variable.
+
 =item -t, --tags=TAGS
 
 A comma-separated list of additional tags to add the files.
