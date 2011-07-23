@@ -6,6 +6,52 @@ tag-shot - add tags to Shotwell photos
 
 =head1 SYNOPSIS
 
+  tag-shot [OPTIONS] FILES
+
+The following options are supported:
+
+=over
+
+=item -g, --geo
+
+Look for geotagging information, and add tags with place names.
+
+=item -t, --tags=TAGS
+
+A comma-separated list of additional tags to add the files.
+
+=item --no-add-new-tags
+
+Do not add new tags to the database, if they are not already there.
+
+=item -d, --database=FILE
+
+The shotwell database file. Defaults to F<~/.shotwell/data/photo.db>.
+
+=item -v, --verbose
+
+Verbose mode.
+
+=item --help
+
+Print help and exit.
+
+=back
+
+=head1 AUTHOR
+
+Robert Rothenberg, C<< <rrwo@cpan.org> >>
+
+=head1 LICENSE AND COPYRIGHT
+
+Copyright 2011 Robert Rothenberg.
+
+This program is free software; you can redistribute it and/or modify it
+under the terms of either: the GNU General Public License as published
+by the Free Software Foundation; or the Artistic License.
+
+See http://dev.perl.org/licenses/ for more information.
+
 =cut
 
 package Shotwell::DB;
@@ -218,10 +264,11 @@ use Geo::Coordinates::Transform;
 use Image::ExifTool;
 use JSON;
 use LWP::Simple;
+use Pod::Usage;
 
 my $Db_File = undef;
 
-my $Verbose    = 1;
+my $Verbose    = 0;
 my $AddNewTags = 1;
 my $GeoTag     = 0;
 
@@ -229,6 +276,12 @@ my @Files = ( );
 my @Tags  = ( );
 
 my $res = GetOptions(
+
+    'help' => sub {
+	pod2usage({
+	    -exitval => 1,
+	});
+    },
 
     'd|database=s'	=> \$Db_File,
 
