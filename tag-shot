@@ -268,9 +268,9 @@ use Getopt::Long;
 use Geo::Coordinates::Transform;
 # use Geo::GeoNames;
 use Image::ExifTool;
-use JSON;
 use LWP::Simple;
 use Pod::Usage;
+use XML::Simple;
 
 my $Db_File = undef;
 
@@ -404,7 +404,7 @@ my %Cache = ( );
 sub toponym_query {
     my $coords = shift;
     my $userid = shift;
-    my $url    = sprintf("http://ws.geonames.org/findNearbyPlaceNameJSON?lat=%f\&lng=%f", @$coords);
+    my $url    = sprintf("http://ws.geonames.org/extendedFindNearby?lat=%f\&lng=%f", @$coords);
     if ($userid) {
 	$url .= "&username=${userid}";
     }
@@ -422,44 +422,19 @@ sub get_toponyms {
     my $coords = shift;
     my $userid = shift;
 
-    my $json   = toponym_query($coords, $userid);
-    if ($json) {
-	my $data   = decode_json($json);
+    my $text   = toponym_query($coords, $userid);
+    if ($text) {
+	my $data = new XML::Simple->XMLin($text, ForceArray => 1);
 
-	my %tags   = ( );
-	foreach my $d (@{$data->{geonames}}) {
+	# geonameId 6295630 = Earth.
 
-	    foreach my $k (qw(name toponymName countryName adminName1 adminName2 adminName3 )) {
-		if (($d->{$k}||"") ne "") {
-		    $tags{$d->{$k}} = 1;
-		}
-	    }
-
-	}
-	return (keys %tags);
+	return map { $_->{name}->[0] } (
+	    grep( $_->{geonameId}->[0] != 6295630, @{ $data->{geoname} })
+	);
     }
     else {
 	return;
     }
-
-    # eval {
-    #
-    # 	my $geo = new Geo::GeoNames();
-    #
-    # 	# This is buggy and often crashes
-    #
-    # 	my $res = $geo->find_nearby_placename(
-    # 	    lat => $coords->[0],
-    # 	    lng => $coords->[1]
-    # 	);
-    #
-    # 	# It also does not return as much information
-    #
-    # 	return ($res->{name}, $res->{countryName});
-    #
-    # };
-
-    # return;
 }
 
 
