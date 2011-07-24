@@ -20,6 +20,9 @@ SYNOPSIS
     --no-add-new-tags
         Do not add new tags to the database, if they are not already there.
 
+    --dry-run
+        Do not save any changes to the database.
+
     -d, --database=FILE
         The shotwell database file. Defaults to ~/.shotwell/data/photo.db.
 

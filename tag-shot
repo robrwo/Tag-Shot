@@ -30,6 +30,10 @@ A comma-separated list of additional tags to add the files.
 
 Do not add new tags to the database, if they are not already there.
 
+=item --dry-run
+
+Do not save any changes to the database.
+
 =item -d, --database=FILE
 
 The shotwell database file. Defaults to F<~/.shotwell/data/photo.db>.
@@ -65,18 +69,20 @@ package Shotwell::DB;
 use strict;
 use warnings;
 
-use Carp;
 use DBI;
 use DBD::SQLite;
 use File::Copy;
 use File::HomeDir;
 use File::Spec;
+use Log::Handler;
 use Scalar::Util qw( refaddr );
 
 use self;
 
 my %Db_File	= ( ); # database files
 my %Dbh		= ( ); # database handles
+
+my %Log		= ( ); # Log::Handler
 
 my %Sth_Photos	= ( ); # for looking up photo info
 my %Sth_Tags	= ( ); # for looking up tags
@@ -101,6 +107,9 @@ sub connect {
     bless $this, $class;
 
     my $file = shift @args || default_db_file();
+    my $log  = shift @args || new Log::Handler();
+
+    $Log{refaddr $this} = $log;
 
     if (-e $file) {
 
@@ -109,12 +118,12 @@ sub connect {
 	copy($file, $file . ".backup");
 
 	$Dbh{refaddr $this} = DBI->connect("dbi:SQLite:dbname=${file}", "", "")
-	    or croak("Unable to connect to database '${file}': ", DBI->errstr);
+	    or $this->log("die", "Unable to connect to database '${file}': ", DBI->errstr);
 
 	return $this;
     }
     else {
-	croak("Cannot find database file '${file}'");
+	$this->log("die", "Cannot find database file '${file}'");
 	return;
     }
 }
@@ -127,6 +136,15 @@ sub disconnect {
       if (exists $Sth_Tags{refaddr $self});
 
     $Dbh{refaddr $self}->disconnect();
+}
+
+sub log {
+    my $log    = $Log{refaddr $self};
+    my $method = shift @args;
+    {
+	no strict 'refs';
+	$log->$method(@args);
+    }
 }
 
 
@@ -150,7 +168,7 @@ sub photo_id {
     unless (exists $Sth_Photos{refaddr $self}) {
 	$Sth_Photos{refaddr $self} = $Dbh{refaddr $self}->prepare(
 	    "SELECT id FROM PhotoTable WHERE filename=? LIMIT 1"
-	    ) or croak("Unable to prepare SQL statement: ",
+	    ) or $self->log("die", "Unable to prepare SQL statement: ",
 		       $Dbh{refaddr $self}->errstr);
     }
 
@@ -163,11 +181,12 @@ sub photo_id {
 	   return $File_Ids{$file} = $row->{id};
 	}
 	else {
+	    $self->log("notice", "File '${file}' is not in the database.\n");
 	    return 0;
 	}
     }
     else {
-	carp("Cannot find file '${file}'\n");
+	$self->log("error", "Cannot find file '${file}'\n");
     }
 }
 
@@ -185,7 +204,7 @@ sub tag_id {
     unless (exists $Sth_Tags{refaddr $self}) {
 	$Sth_Tags{refaddr $self} = $Dbh{refaddr $self}->prepare(
 	    "SELECT id, photo_id_list FROM TagTable WHERE name=? LIMIT 1"
-	    ) or croak("Unable to prepare SQL statement: ",
+	    ) or $self->log("die", "Unable to prepare SQL statement: ",
 		       $Dbh{refaddr $self}->errstr);
     }
 
@@ -198,6 +217,7 @@ sub tag_id {
 	return $Tag_Ids{$tag} = $id;
     }
     else {
+	$self->log("notice", "Tag '${tag}' is not in the database.\n");
 	return 0;
     }
 }
@@ -226,12 +246,12 @@ sub save_tags {
 
     my $sth_update = $Dbh{refaddr $self}->prepare(
 	"UPDATE TagTable SET photo_id_list=? WHERE id=?"
-	) or croak("Unable to prepare SQL statement: ",
+	) or $self->log("die", "Unable to prepare SQL statement: ",
 		   $Dbh{refaddr $self}->errstr);
 
     my $sth_add = $Dbh{refaddr $self}->prepare(
 	"INSERT INTO TagTable (name, photo_id_list, time_created) VALUES (?, ?, ?)"
-	) or croak("Unable to prepare SQL statement: ",
+	) or $self->log("die", "Unable to prepare SQL statement: ",
 		   $Dbh{refaddr $self}->errstr);
 
     foreach my $tag (keys %Tag_Photos) {
@@ -250,7 +270,7 @@ sub save_tags {
 	    }
 	}
 	else {
-	    carp("No photos associated with tag '${tag}': ignoring.\n");
+	    $self->log("notice", "No photos associated with tag '${tag}': ignoring.\n");
 	}
     }
 
@@ -263,20 +283,20 @@ package main;
 use strict;
 use warnings;
 
-use Carp;
 use Getopt::Long;
 use Geo::Coordinates::Transform;
-# use Geo::GeoNames;
 use Image::ExifTool;
+use Log::Handler;
 use LWP::Simple;
 use Pod::Usage;
 use XML::Simple;
 
 my $Db_File = undef;
 
-my $Verbose    = 0;
-my $AddNewTags = 1;
-my $GeoTag     = 0;
+my $Verbose	= 0;
+my $AddNewTags	= 1;
+my $GeoTag	= 0;
+my $DryRun	= 0;
 
 my @Files = ( );
 my @Tags  = ( );
@@ -311,6 +331,8 @@ my $res = GetOptions(
 
     'u|username=s' => \$Username,
 
+    'dry-run!' => \$DryRun,
+
     '<>'		=> sub {
 	push @Files, shift;
       },
@@ -321,7 +343,18 @@ unless ($res) {
     exit 1;
 }
 
-my $db = Shotwell::DB->connect($Db_File);
+my $log = new Log::Handler();
+
+$log->add(
+    screen => {
+	log_to		=> "STDERR",
+	maxlevel	=> ($Verbose ? "info" : "error" ),
+	message_layout  => "%m",
+	die_on_errors   => 1,
+    },
+);
+
+my $db = Shotwell::DB->connect($Db_File, $log);
 
 my $exif = new Image::ExifTool;
 
@@ -333,7 +366,7 @@ foreach my $file (@Files) {
     my $id = $db->photo_id($file);
     if ($id) {
 
-	print "${file}: ", if ($Verbose);
+	my $out = "${file}: ";
 
 	if ($GeoTag) {
 
@@ -343,7 +376,7 @@ foreach my $file (@Files) {
 
 		my @toponyms = get_toponyms($coords, $Username);
 
-		print join(",", @toponyms), "\n";
+		$out .= join(",", @toponyms) . "\n";
 
 		foreach my $name (@toponyms) {
 		    $db->tag_id($name);                    # load tag info
@@ -354,11 +387,11 @@ foreach my $file (@Files) {
 
 	}
 
-	print "\n", if ($Verbose);
+	$log->info($out);
 
     }
     else {
-	carp("File '${file}' not found in the database.\n");
+	$log->warn("File '${file}' not found in the database.\n");
     }
 }
 
@@ -367,7 +400,10 @@ foreach my $tag (@Tags) {
     $db->add_photos_to_tag($tag, @Files);
 }
 
-$db->save_tags($AddNewTags);
+unless ($DryRun) {
+    $log->notice("Saving changes.\n");
+    $db->save_tags($AddNewTags);
+}
 
 $db->disconnect();
 
@@ -409,7 +445,7 @@ sub toponym_query {
 	$url .= "&username=${userid}";
     }
 
-    # print "${url}\n";
+    $log->debug("URL: ${url}\n");
 
     if (exists $Cache{$url}) {
 	return $Cache{$url};
