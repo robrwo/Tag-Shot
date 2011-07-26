@@ -190,6 +190,8 @@ sub photo_id {
     }
 }
 
+my %Seen = ( );
+
 sub tag_id {
     my $tag = shift @args;
 
@@ -217,7 +219,9 @@ sub tag_id {
 	return $Tag_Ids{$tag} = $id;
     }
     else {
-	$self->log("notice", "Tag '${tag}' is not in the database.\n");
+	$self->log("notice", "Tag '${tag}' is not in the database.\n"),
+	  unless ($Seen{$tag});
+	$Seen{$tag} = 1;
 	return 0;
     }
 }
